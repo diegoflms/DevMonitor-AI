@@ -8,10 +8,10 @@ import uuid # Para gerar IDs únicos
 st.title("DevMonitor AI")
 
 # Função para construir a lista de dados a serem salvos no Google Sheets
-def build_list_to_sheet(message_id, role, content, feedback, token_usage):
+def build_list_to_sheet(message_id, role, content, feedback, token_usage, cached_tokens=0):
     timestamp = (datetime.now() - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
     fb_text = str(feedback) # Garante que o feedback seja string para o Sheets não bugar
-    return [timestamp, st.session_state['uuid'], message_id, role, content, fb_text, token_usage]
+    return [timestamp, st.session_state['uuid'], message_id, role, content, fb_text, token_usage, cached_tokens]
 
 # Função para salvar feedback no estado da sessão
 def save_feedback(index):
@@ -29,7 +29,7 @@ def save_feedback(index):
 if 'uuid' not in st.session_state:
     st.session_state['uuid'] = str(uuid.uuid4())
 if "openai_model" not in st.session_state:
-    st.session_state["openai_model"] = "gpt-4o-mini"
+    st.session_state["openai_model"] = st.secrets["OPENAI_MODEL"]
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -38,7 +38,7 @@ client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"]) # Inicializa o cliente Ope
 
 # Mensagem de inicial
 if len(st.session_state.messages) == 0:
-    mensagem_inicial = "Olá! Sou seu assistente de web dev. Pergunte-me qualquer coisa relacionada a programação e farei o meu melhor para ajudar!"
+    mensagem_inicial = "Olá! Sou seu assistente de web dev. Pergunte-me qualquer coisa relacionada a programação e farei o meu melhor para ajudar! Para mais informações, consulte a barra lateral."
     st.session_state.messages.append({"role": "assistant", "content": mensagem_inicial, "message_id": str(uuid.uuid4())})
 
 # Mensagem de onboarding na sidebar
@@ -62,7 +62,7 @@ for i, message in enumerate(st.session_state.messages):
             ) # Componente de feedback
 
 # Input do usuário
-if prompt := st.chat_input("Dúvida de código?"):
+if prompt := st.chat_input("Dúvidas de código?"):
     msg_id = str(uuid.uuid4()) # Gera um ID único para a interação
 
     st.session_state.messages.append({"role": "user", "content": prompt, "message_id": msg_id}) # Salva a mensagem do usuário no estado
@@ -80,7 +80,7 @@ if prompt := st.chat_input("Dúvida de código?"):
         ) # Solicita resposta em streaming
         
         # Intercepta o stream para capturar tokens usados
-        usage_data = {"prompt": 0, "completion": 0}
+        usage_data = {"prompt": 0, "completion": 0, "cached": 0}
         def interceptador(stream_original):
             for chunk in stream_original:
                 if hasattr(chunk, 'choices') and len(chunk.choices) > 0:
@@ -89,6 +89,8 @@ if prompt := st.chat_input("Dúvida de código?"):
                 if hasattr(chunk, 'usage') and chunk.usage is not None:
                     usage_data["prompt"] = chunk.usage.prompt_tokens
                     usage_data["completion"] = chunk.usage.completion_tokens
+                    if hasattr(chunk.usage, 'prompt_tokens_details') and chunk.usage.prompt_tokens_details:
+                         usage_data["cached"] = chunk.usage.prompt_tokens_details.cached_tokens
 
         response = st.write_stream(interceptador(stream)) # Mostra a resposta em streaming
         
@@ -100,8 +102,8 @@ if prompt := st.chat_input("Dúvida de código?"):
         ) # Componente de feedback para a resposta
 
         # Salva no Sheets (Pergunta e Resposta iniciais)
-        user_list = build_list_to_sheet(msg_id, "user", prompt, "n/a", usage_data["prompt"])
-        assistant_list = build_list_to_sheet(msg_id, "assistant", response, "a ser enviado", usage_data["completion"])
+        user_list = build_list_to_sheet(msg_id, "user", prompt, "n/a", usage_data["prompt"], usage_data["cached"])
+        assistant_list = build_list_to_sheet(msg_id, "assistant", response, "a ser enviado", usage_data["completion"], 0)
         add_rows_to_sheet(tab, [user_list, assistant_list])
 
     st.session_state.messages.append({"role": "assistant", "content": response, "message_id": msg_id}) # Salva resposta no estado
